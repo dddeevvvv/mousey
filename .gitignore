@@ -1,0 +1,7 @@
+.build*/
+dist/
+.signing/
+.DS_Store
+probe/
+private/
+.swiftpm/
