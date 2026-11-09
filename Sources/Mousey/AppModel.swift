@@ -74,7 +74,7 @@ final class AppModel: ObservableObject {
 	private var gate = PairingGate()
 	private var lastBeat: UInt64 = 0
 	private var lastBeatChange = Date()
-	private var previousApp: NSRunningApplication?
+	private var focusToRestore = FocusToRestore<NSRunningApplication>()
 	private var signalSources: [DispatchSourceSignal] = []
 	private var activity: NSObjectProtocol?
 
@@ -519,11 +519,10 @@ final class AppModel: ObservableObject {
 
 	private func secureInput(_ capturing: Bool) {
 		if capturing {
-			previousApp = NSWorkspace.shared.frontmostApplication
+			focusToRestore.secureInputSeen(frontmost: NSWorkspace.shared.frontmostApplication)
 			NSApp.activate(ignoringOtherApps: true)
 		} else {
-			previousApp?.activate(options: [])
-			previousApp = nil
+			focusToRestore.captureEnded()?.activate(options: [])
 		}
 	}
 

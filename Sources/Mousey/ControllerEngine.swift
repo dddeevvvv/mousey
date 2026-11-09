@@ -420,11 +420,8 @@ final class ControllerEngine {
 		tries &+= 1
 		linkStarted = now
 		// Weak, because these system callbacks can arrive after the engine has stopped.
-		link = LinkClient(endpoint: endpoint, key: peer.key, loopback: loopback != nil, onPacket: { [weak self] data in
-			self?.perform { self?.drain(data) }
-		}, onState: { [weak self] state in
-			self?.perform { self?.linkState(state) }
-		})
+		link = LinkClient(endpoint: endpoint, key: peer.key, loopback: loopback != nil, deliver: { [weak self] in self?.perform($0) },
+			onPacket: { [weak self] in self?.drain($0) }, onState: { [weak self] in self?.linkState($0) })
 		handle(.tick)
 	}
 

@@ -139,6 +139,13 @@ final class ClipSessionTests: XCTestCase {
 		XCTAssertNil(s.arriving(now: t0 + 0.05, changeCount: 1))
 	}
 
+	func testAnItemFromBeforeInputLeftIsNotAppliedOnReturn() {
+		var s = ClipSession(changeCount: 0)
+		XCTAssertNil(s.receive(text("sent outside a crossing"), now: t0, changeCount: 0))
+		_ = s.leaving(changeCount: 0)
+		XCTAssertNil(s.arriving(now: t0 + 1, changeCount: 0), "input left after it arrived, so it belongs to no crossing")
+	}
+
 	func testAWrittenItemIsNotSentBack() {
 		var s = ClipSession(changeCount: 1)
 		s.applied(changeCount: 2)

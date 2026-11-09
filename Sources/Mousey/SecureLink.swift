@@ -70,24 +70,46 @@ final class LinkClient {
 	private let connection: NWConnection
 	private let queue = DispatchQueue(label: "mousey-link-client", qos: .userInteractive)
 
-	init(endpoint: NWEndpoint, key: Data, loopback: Bool, onPacket: @escaping (Data) -> Void, onState: @escaping (NWConnection.State) -> Void) {
+	private let deliver: (@escaping () -> Void) -> Void
+	private let lock = NSLock()
+	private var cancelled = false
+
+	/// Callbacks reach the owner through `deliver`, on the owner's thread. None runs after `cancel()`, even one already
+	/// on its way, because an owner that replaced this link must not hear from it.
+	init(endpoint: NWEndpoint, key: Data, loopback: Bool, deliver: @escaping (@escaping () -> Void) -> Void, onPacket: @escaping (Data) -> Void, onState: @escaping (NWConnection.State) -> Void) {
+		self.deliver = deliver
 		connection = NWConnection(to: endpoint, using: SecureLink.parameters(key: key, loopback: loopback))
 		connection.stateUpdateHandler = { [weak self] state in
-			if case .ready = state, let self, !SecureLink.isForwardSecret(self.connection) {
-				Log.write("link refused: the other side settled on suite \(SecureLink.negotiatedSuite(self.connection).map { String($0, radix: 16) } ?? "unknown")")
-				self.connection.cancel()
+			guard let self else { return }
+			if case .ready = state, !SecureLink.isForwardSecret(connection) {
+				Log.write("link refused: the other side settled on suite \(SecureLink.negotiatedSuite(connection).map { String($0, radix: 16) } ?? "unknown")")
+				connection.cancel()
 				return
 			}
-			onState(state)
+			hand { onState(state) }
 		}
 		connection.start(queue: queue)
 		receive(onPacket)
 	}
 
+	private func hand(_ work: @escaping () -> Void) {
+		deliver { [weak self] in
+			guard let self, !isCancelled else { return }
+			work()
+		}
+	}
+
+	private var isCancelled: Bool {
+		lock.lock()
+		defer { lock.unlock() }
+		return cancelled
+	}
+
 	private func receive(_ onPacket: @escaping (Data) -> Void) {
 		connection.receiveMessage { [weak self] data, _, _, error in
-			if let data { onPacket(data) }
-			if error == nil { self?.receive(onPacket) }
+			guard let self else { return }
+			if let data { hand { onPacket(data) } }
+			if error == nil { receive(onPacket) }
 		}
 	}
 
@@ -95,7 +117,12 @@ final class LinkClient {
 
 	/// The suite the handshake settled on, once it is ready. For the self-test.
 	var negotiatedSuite: UInt16? { SecureLink.negotiatedSuite(connection) }
-	func cancel() { connection.cancel() }
+	func cancel() {
+		lock.lock()
+		cancelled = true
+		lock.unlock()
+		connection.cancel()
+	}
 }
 
 /// The controlled Mac's end. The newest connection to prove itself is the peer, because a restarted peer arrives from a

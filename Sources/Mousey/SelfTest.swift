@@ -245,7 +245,7 @@ struct SelfTest {
 		}
 		defer { listener.stop() }
 		let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!)
-		func client(_ k: Data, _ out: Mailbox<Data>) -> LinkClient { LinkClient(endpoint: endpoint, key: k, loopback: true, onPacket: { out.put($0) }, onState: { _ in }) }
+		func client(_ k: Data, _ out: Mailbox<Data>) -> LinkClient { LinkClient(endpoint: endpoint, key: k, loopback: true, deliver: { $0() }, onPacket: { out.put($0) }, onState: { _ in }) }
 		func take<T>(_ box: Mailbox<T>, millis: Int) -> T? {
 			let deadline = Date().addingTimeInterval(Double(millis) / 1000)
 			while Date() < deadline { if let first = box.take(timeoutMillis: 50).first { return first } }
@@ -292,7 +292,7 @@ struct SelfTest {
 		weakServer.start(queue: .global())
 		_ = weakServerUp.wait(timeout: .now() + 2)
 		let linkStates = Mailbox<String>()
-		let refusing = LinkClient(endpoint: .hostPort(host: "127.0.0.1", port: weakServer.port ?? .any), key: key, loopback: true, onPacket: { _ in }, onState: { state in
+		let refusing = LinkClient(endpoint: .hostPort(host: "127.0.0.1", port: weakServer.port ?? .any), key: key, loopback: true, deliver: { $0() }, onPacket: { _ in }, onState: { state in
 			if case .ready = state { linkStates.put("ready") }
 			if case .cancelled = state { linkStates.put("cancelled") }
 		})
@@ -301,6 +301,36 @@ struct SelfTest {
 		let linkState = take(linkStates, millis: 3000)
 		check(linkState == "cancelled", "and the keyboard Mac drops that link instead of reporting it up: \(linkState ?? "no state")")
 		refusing.cancel()
+
+		func heldClient(_ marker: UInt8) -> (client: LinkClient, callbacks: DispatchQueue, heard: Mailbox<String>) {
+			let callbacks = DispatchQueue(label: "mousey-selftest-held-\(marker)")
+			callbacks.suspend()
+			let heard = Mailbox<String>()
+			let made = LinkClient(endpoint: endpoint, key: key, loopback: true, deliver: { callbacks.async(execute: $0) }, onPacket: { _ in heard.put("packet") }, onState: { heard.put("\($0)") })
+			made.send(Data([marker]))
+			return (made, callbacks, heard)
+		}
+		func everything(in box: Mailbox<String>, millis: Int) -> [String] {
+			var all: [String] = []
+			let deadline = Date().addingTimeInterval(Double(millis) / 1000)
+			while Date() < deadline { all += box.take(timeoutMillis: 50) }
+			return all
+		}
+		let kept = heldClient(81), late = heldClient(82)
+		var markers = Set<Data>()
+		let heldDeadline = Date().addingTimeInterval(3)
+		while markers.count < 2, Date() < heldDeadline {
+			for p in inbox.take(timeoutMillis: 50) where p.bytes == Data([81]) || p.bytes == Data([82]) { markers.insert(p.bytes) }
+		}
+		usleep(200_000)
+		late.client.cancel()
+		kept.callbacks.resume()
+		late.callbacks.resume()
+		let keptHeard = everything(in: kept.heard, millis: 600)
+		let lateHeard = everything(in: late.heard, millis: 400)
+		check(markers.count == 2 && keptHeard.contains("ready"), "a link's callbacks wait in its owner's queue, and arrive: \(keptHeard)")
+		check(markers.count == 2 && lateHeard.isEmpty, "once the link is cancelled, none already waiting reaches the owner: \(lateHeard)")
+		kept.client.cancel()
 
 		first.cancel()
 		let restartedOut = Mailbox<Data>()
@@ -615,7 +645,7 @@ struct SelfTest {
 		let targetScreen = Displays([CGRect(x: 0, y: 0, width: 2560, height: 1440)])
 		guard let target = LoopbackTarget(displays: targetScreen) else { return check(false, "loopback target") }
 		let answers = Mailbox<Data>()
-		let link = LinkClient(endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: target.port)!), key: LoopbackTarget.key, loopback: true, onPacket: { answers.put($0) }, onState: { _ in })
+		let link = LinkClient(endpoint: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: target.port)!), key: LoopbackTarget.key, loopback: true, deliver: { $0() }, onPacket: { answers.put($0) }, onState: { _ in })
 		defer { link.cancel() }
 		target.start()
 		defer { target.stop() }

@@ -103,6 +103,7 @@ public struct ClipSession: Sendable {
 	public mutating func leaving(changeCount: Int) -> Bool {
 		defer { lastChange = changeCount }
 		arrival = nil
+		early = nil
 		return changeCount != lastChange
 	}
 
